@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Letterboxd → Netflix España</title>
+<style>
+  :root {
+    --bg: #14181c;
+    --card: #1c2228;
+    --accent: #00e054;
+    --text: #eceff1;
+    --muted: #8a9aa5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 32px 16px 64px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin-bottom: 4px; }
+  p.sub { color: var(--muted); margin-top: 0; }
+  .card {
+    background: var(--card);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+  input[type=text] {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 6px;
+    border: 1px solid #2c343b;
+    background: #0f1317;
+    color: var(--text);
+    font-size: 1rem;
+    margin-bottom: 14px;
+  }
+  .radios { display: flex; gap: 16px; margin-bottom: 16px; }
+  .radios label { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 0.95rem; }
+  button {
+    background: var(--accent);
+    color: #05210f;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 0.95rem;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .progress-wrap { display: none; margin-top: 16px; }
+  .bar-bg { background: #0f1317; border-radius: 6px; height: 10px; overflow: hidden; }
+  .bar { background: var(--accent); height: 100%; width: 0%; transition: width 0.3s; }
+  .progress-text { font-size: 0.85rem; color: var(--muted); margin-top: 8px; }
+  .error { color: #ff6b6b; margin-top: 12px; font-size: 0.9rem; }
+  .results { display: grid; gap: 12px; }
+  .film {
+    display: flex;
+    gap: 12px;
+    background: var(--card);
+    border-radius: 8px;
+    padding: 10px;
+    align-items: center;
+  }
+  .film img { width: 46px; height: 68px; object-fit: cover; border-radius: 4px; background: #0f1317; }
+  .film-info { flex: 1; }
+  .film-title { font-weight: 600; }
+  .film-year { color: var(--muted); font-size: 0.85rem; }
+  .film a {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  .empty-state { color: var(--muted); text-align: center; padding: 24px 0; }
+  .count-badge {
+    display: inline-block;
+    background: var(--accent);
+    color: #05210f;
+    font-size: 0.8rem;
+    font-weight: 700;
+    padding: 2px 10px;
+    border-radius: 999px;
+    margin-left: 8px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Letterboxd → Netflix España</h1>
+  <p class="sub">Comprueba qué películas de tu lista de Letterboxd están disponibles en Netflix España ahora mismo.</p>
+
+  <div class="card">
+    <label for="username">Usuario de Letterboxd</label>
+    <input type="text" id="username" placeholder="p.ej. ibaixe" />
+
+    <div class="radios">
+      <label><input type="radio" name="list_type" value="watchlist" checked /> Watchlist (pendientes)</label>
+      <label><input type="radio" name="list_type" value="watched" /> Vistas</label>
+    </div>
+
+    <label for="api-url">URL del backend</label>
+    <input type="text" id="api-url" value="http://localhost:8000" />
+
+    <button id="scan-btn">Comprobar</button>
+
+    <div class="progress-wrap" id="progress-wrap">
+      <div class="bar-bg"><div class="bar" id="bar"></div></div>
+      <div class="progress-text" id="progress-text"></div>
+    </div>
+    <div class="error" id="error" style="display:none;"></div>
+  </div>
+
+  <div id="results-header" style="display:none;">
+    <h2 style="font-size:1.1rem;">Disponibles en Netflix ES<span class="count-badge" id="count-badge">0</span></h2>
+  </div>
+  <div class="results" id="results"></div>
+</div>
+
+<script>
+const scanBtn = document.getElementById('scan-btn');
+const usernameInput = document.getElementById('username');
+const apiUrlInput = document.getElementById('api-url');
+const progressWrap = document.getElementById('progress-wrap');
+const bar = document.getElementById('bar');
+const progressText = document.getElementById('progress-text');
+const errorBox = document.getElementById('error');
+const resultsDiv = document.getElementById('results');
+const resultsHeader = document.getElementById('results-header');
+const countBadge = document.getElementById('count-badge');
+
+let pollTimer = null;
+
+function resetUI() {
+  errorBox.style.display = 'none';
+  errorBox.textContent = '';
+  resultsDiv.innerHTML = '';
+  resultsHeader.style.display = 'none';
+  bar.style.width = '0%';
+  progressWrap.style.display = 'none';
+  if (pollTimer) clearInterval(pollTimer);
+}
+
+function renderResults(results) {
+  resultsDiv.innerHTML = '';
+  if (results.length === 0) {
+    resultsDiv.innerHTML = '<div class="empty-state">Ninguna coincidencia (todavía) en Netflix España.</div>';
+    return;
+  }
+  results.forEach(f => {
+    const el = document.createElement('div');
+    el.className = 'film';
+    const poster = f.poster ? f.poster.replace('{profile}', 's166') : '';
+    el.innerHTML = `
+      ${poster ? `<img src="${poster}" alt="">` : ''}
+      <div class="film-info">
+        <div class="film-title">${f.title}</div>
+        <div class="film-year">${f.year ?? ''}</div>
+      </div>
+      <a href="${f.netflix_url}" target="_blank" rel="noopener">Ver en Netflix →</a>
+    `;
+    resultsDiv.appendChild(el);
+  });
+}
+
+async function poll(apiUrl, jobId) {
+  try {
+    const res = await fetch(`${apiUrl}/status/${jobId}`);
+    if (!res.ok) throw new Error('No se pudo consultar el progreso del job');
+    const job = await res.json();
+
+    const pct = job.total > 0 ? Math.round((job.done / job.total) * 100) : 0;
+    bar.style.width = pct + '%';
+    progressText.textContent = job.status === 'running'
+      ? `Comprobando ${job.done}/${job.total}${job.current ? ' — ' + job.current : ''}...`
+      : `${job.done}/${job.total} comprobadas`;
+
+    resultsHeader.style.display = 'block';
+    countBadge.textContent = job.results.length;
+    renderResults(job.results);
+
+    if (job.errors && job.errors.length > 0) {
+      errorBox.style.display = 'block';
+      const uniqueMsgs = [...new Set(job.errors.map(e => e.error))].slice(0, 3);
+      errorBox.textContent = `${job.errors.length} película(s) dieron error al comprobar en JustWatch: ${uniqueMsgs.join(' | ')}`;
+    }
+
+    if (job.status === 'done') {
+      clearInterval(pollTimer);
+      scanBtn.disabled = false;
+      progressText.textContent = `Listo — ${job.done}/${job.total} comprobadas, ${job.results.length} en Netflix ES.`;
+    } else if (job.status === 'error') {
+      clearInterval(pollTimer);
+      scanBtn.disabled = false;
+      errorBox.style.display = 'block';
+      errorBox.textContent = job.error || 'Error desconocido durante el escaneo.';
+    }
+  } catch (e) {
+    clearInterval(pollTimer);
+    scanBtn.disabled = false;
+    errorBox.style.display = 'block';
+    errorBox.textContent = 'No se pudo conectar con el backend (' + e.message + '). ¿Está arrancado en ' + apiUrl + '?';
+  }
+}
+
+scanBtn.addEventListener('click', async () => {
+  resetUI();
+  const username = usernameInput.value.trim();
+  const apiUrl = apiUrlInput.value.trim().replace(/\/$/, '');
+  const listType = document.querySelector('input[name=list_type]:checked').value;
+
+  if (!username) {
+    errorBox.style.display = 'block';
+    errorBox.textContent = 'Introduce un usuario de Letterboxd.';
+    return;
+  }
+
+  scanBtn.disabled = true;
+  progressWrap.style.display = 'block';
+  progressText.textContent = 'Iniciando...';
+
+  try {
+    const res = await fetch(`${apiUrl}/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, list_type: listType }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${res.status}`);
+    }
+    const { job_id } = await res.json();
+    pollTimer = setInterval(() => poll(apiUrl, job_id), 1200);
+    poll(apiUrl, job_id);
+  } catch (e) {
+    scanBtn.disabled = false;
+    errorBox.style.display = 'block';
+    errorBox.textContent = 'No se pudo iniciar el escaneo (' + e.message + '). ¿Está arrancado el backend en ' + apiUrl + '?';
+  }
+});
+</script>
+</body>
+</html>
